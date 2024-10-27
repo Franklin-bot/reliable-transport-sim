@@ -1,8 +1,9 @@
+import struct
+import time
 # do not import anything else from loss_socket besides LossyUDP
 from lossy_socket import LossyUDP
 # do not import anything else from socket except INADDR_ANY
 from socket import INADDR_ANY
-import struct
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -23,6 +24,7 @@ class Streamer:
         self.packet_size = 1000
         self.receive_buffer = {}
         self.closed = False
+        self.ack = False
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
@@ -33,22 +35,19 @@ class Streamer:
 
         for i in range(0, len(data_bytes), self.packet_size):
             curr_bytes = data_bytes[i:min(i+self.packet_size, len(data_bytes))]
-            segment = struct.pack(f"!I{len(curr_bytes)}s", self.seq_num, curr_bytes)
+            segment = struct.pack(f"!II{len(curr_bytes)}s", self.seq_num, 0, curr_bytes)
             self.seq_num += min(len(curr_bytes), self.packet_size)
             self.socket.sendto(segment, (self.dst_ip, self.dst_port))
-        
 
+            print("waiting for ack")
+            while not self.ack:
+                time.sleep(0.01)
+            self.ack = False
 
     def recv(self) -> bytes:
         """Blocks (waits) if no data is ready to be read from the connection."""
         
-        # segment, addr = self.socket.recvfrom()
-        # tup = struct.unpack(f"!I{len(segment)-4}s", segment)
-        # seq_num = tup[0]
-        # data = tup[1]
-
         res = bytearray()
-        # self.receive_buffer[seq_num] = data
 
         while (self.expected in self.receive_buffer):
             buffer_segment = self.receive_buffer.pop(self.expected)
@@ -56,11 +55,6 @@ class Streamer:
             self.expected += len(buffer_segment)
 
         return bytes(res)
-
-
-
-
-
 
     def close(self) -> None:
         """Cleans up. It should block (wait) until the Streamer is done with all
@@ -70,18 +64,25 @@ class Streamer:
         self.socket.stoprecv()
         pass
 
-
-
     def listener(self) -> None:
 
         while not self.closed:
             print(self.receive_buffer)
             try:
                 segment, addr = self.socket.recvfrom()
-                tup = struct.unpack(f"!I{len(segment)-4}s", segment)
+                tup = struct.unpack(f"!II{len(segment)-8}s", segment)
                 seq_num = tup[0]
-                data = tup[1]
-                self.receive_buffer[seq_num] = data
+                is_ack = tup[1]
+                data = tup[2]
+                if not is_ack:
+                    print("data recieved")
+                    self.receive_buffer[seq_num] = data
+                    print("sending ack")
+                    segment = struct.pack(f"!IIs", self.seq_num, 1, b'')
+                    self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+                else:
+                    print("ack recieved")
+                    self.ack = True
             except Exception as e:
                 print("listener died!")
                 print(e)
