@@ -35,7 +35,7 @@ class Streamer:
             curr_bytes = data_bytes[i:min(i+self.packet_size, len(data_bytes))]
             hashed_bytes = hashlib.md5(curr_bytes).digest()
             segment = struct.pack(f"!III16s{len(curr_bytes)}s", self.seq_num, 0, 0, hashed_bytes, curr_bytes)
-            self.seq_num += min(len(curr_bytes)+16, self.packet_size)
+            self.seq_num += min(len(curr_bytes), self.packet_size)
 
             while True:
                 self.socket.sendto(segment, (self.dst_ip, self.dst_port))
