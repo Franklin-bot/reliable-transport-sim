@@ -42,14 +42,12 @@ class Streamer:
             hash = hashlib.md5(payload).digest()
             segment = hash + payload
 
-            while True:
-                self.socket.sendto(segment, (self.dst_ip, self.dst_port))
-                self.transit[self.seq_num] = segment
-                self.earliest_unacked = min(self.seq_num, self.earliest_unacked)
-                print(f"sending... earliest unacked is now {self.earliest_unacked}")
-                print(f"sending... transit is {self.transit}")
-                print("waiting for ack")
-                if self.waitForAck(): break
+            self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+            self.transit[self.seq_num] = [0, segment]
+            self.earliest_unacked = min(self.seq_num, self.earliest_unacked)
+            print(f"sending... earliest unacked is now {self.earliest_unacked}")
+            print(f"sending... transit is {self.transit.keys()}")
+            print("waiting for ack")
 
             self.seq_num += min(len(curr_bytes), self.packet_size)
             self.ack = False
@@ -127,10 +125,19 @@ class Streamer:
                         print("fin ack recieved")
                     else:
                         print(f"data ack recieved for seq num {seq_num}")
-                        if seq_num in self.transit and seq_num == self.earliest_unacked: self.transit.pop(seq_num)
-                        self.earliest_unacked = min(self.transit.keys()) if len(self.transit) > 0 else float('inf')
+                        if seq_num in self.transit:
+                            if seq_num == self.earliest_unacked:
+                                self.transit.pop(seq_num)
+                                self.earliest_unacked = min(self.transit.keys()) if len(self.transit) > 0 else float('inf')
+                                while (self.earliest_unacked in self.transit and self.transit[self.earliest_unacked][0] == 1):
+                                    self.transit.pop(self.earliest_unacked)
+                                    self.earliest_unacked = min(self.transit.keys()) if len(self.transit) > 0 else float('inf')
+                            else:
+                                self.transit[seq_num][0] = 1
+
+
                         print(f"ack recieved... earliest unacked is now {self.earliest_unacked}")
-                        print(f"ack recieved... transit: {self.transit}")
+                        print(f"ack recieved... transit: {self.transit.keys()}")
                     self.ack = True
 
                 elif fin:
