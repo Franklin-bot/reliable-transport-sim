@@ -29,6 +29,7 @@ class Streamer:
         self.fin_recieved = False
 
         self.transit = {}
+        self.earliest_unacked = float('inf')
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
@@ -40,12 +41,17 @@ class Streamer:
             payload = struct.pack(f"!III{len(curr_bytes)}s", self.seq_num, 0, 0, curr_bytes)
             hash = hashlib.md5(payload).digest()
             segment = hash + payload
-            self.seq_num += min(len(curr_bytes), self.packet_size)
 
             while True:
                 self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+                self.transit[self.seq_num] = segment
+                self.earliest_unacked = min(self.seq_num, self.earliest_unacked)
+                print(f"sending... earliest unacked is now {self.earliest_unacked}")
+                print(f"sending... transit is {self.transit}")
                 print("waiting for ack")
                 if self.waitForAck(): break
+
+            self.seq_num += min(len(curr_bytes), self.packet_size)
             self.ack = False
 
     def waitForAck(self):
@@ -120,7 +126,11 @@ class Streamer:
                     if fin:
                         print("fin ack recieved")
                     else:
-                        print("data ack recieved")
+                        print(f"data ack recieved for seq num {seq_num}")
+                        if seq_num in self.transit and seq_num == self.earliest_unacked: self.transit.pop(seq_num)
+                        self.earliest_unacked = min(self.transit.keys()) if len(self.transit) > 0 else float('inf')
+                        print(f"ack recieved... earliest unacked is now {self.earliest_unacked}")
+                        print(f"ack recieved... transit: {self.transit}")
                     self.ack = True
 
                 elif fin:
@@ -135,7 +145,7 @@ class Streamer:
                     print("data recieved")
                     self.receive_buffer[seq_num] = data
                     print("sending ack")
-                    payload = struct.pack(f"!IIIs", self.seq_num, 1, 0, b'')
+                    payload = struct.pack(f"!IIIs", seq_num, 1, 0, b'')
                     hash = hashlib.md5(payload).digest()
                     segment = hash + payload
                     self.socket.sendto(segment, (self.dst_ip, self.dst_port))
