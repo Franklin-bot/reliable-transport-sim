@@ -25,24 +25,31 @@ class Streamer:
         self.receive_buffer = {}
         self.closed = False
         self.ack = False
+        self.fin = False
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
 
     def send(self, data_bytes: bytes) -> None:
-        """Note that data_bytes can be larger than one packet."""
-        # Your code goes here!  The code below should be changed!
 
         for i in range(0, len(data_bytes), self.packet_size):
             curr_bytes = data_bytes[i:min(i+self.packet_size, len(data_bytes))]
-            segment = struct.pack(f"!II{len(curr_bytes)}s", self.seq_num, 0, curr_bytes)
+            segment = struct.pack(f"!III{len(curr_bytes)}s", self.seq_num, 0, 0, curr_bytes)
             self.seq_num += min(len(curr_bytes), self.packet_size)
-            self.socket.sendto(segment, (self.dst_ip, self.dst_port))
 
-            print("waiting for ack")
-            while not self.ack:
-                time.sleep(0.01)
+            while True:
+                self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+                print("waiting for ack")
+                if self.waitForAck(): break
             self.ack = False
+
+    def waitForAck(self):
+        for _ in range(0, 25):
+            time.sleep(0.01)
+            if (self.ack) : return True
+        print("resending")
+        return False
+
 
     def recv(self) -> bytes:
         """Blocks (waits) if no data is ready to be read from the connection."""
@@ -54,12 +61,28 @@ class Streamer:
             res += buffer_segment
             self.expected += len(buffer_segment)
 
+
         return bytes(res)
 
     def close(self) -> None:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
         # your code goes here, especially after you add ACKs and retransmissions.
+
+
+        # send fin
+        print("sending fin")
+        while True:
+            segment = struct.pack(f"!IIIs", self.seq_num, 0, 1, b'')
+            self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+
+            if self.waitForAck(): break
+        self.ack = False
+
+        while not self.fin:
+            time.sleep(0.01)
+
+        time.sleep(2)
         self.closed = True
         self.socket.stoprecv()
         pass
@@ -67,22 +90,37 @@ class Streamer:
     def listener(self) -> None:
 
         while not self.closed:
-            print(self.receive_buffer)
             try:
                 segment, addr = self.socket.recvfrom()
-                tup = struct.unpack(f"!II{len(segment)-8}s", segment)
+                if not segment:
+                    break
+                tup = struct.unpack(f"!III{len(segment)-12}s", segment)
                 seq_num = tup[0]
                 is_ack = tup[1]
-                data = tup[2]
-                if not is_ack:
+                fin = tup[2]
+                data = tup[3]
+
+                if is_ack:
+                    if fin:
+                        print("fin ack recieved")
+                    else:
+                        print("data ack recieved")
+                    self.ack = True
+
+                elif fin:
+                    print("fin recieved")
+                    self.fin = True
+                    print("sending fin ack")
+                    segment = struct.pack(f"!IIIs", self.seq_num, 1, 1, b'')
+                    self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+
+                else:
                     print("data recieved")
                     self.receive_buffer[seq_num] = data
                     print("sending ack")
-                    segment = struct.pack(f"!IIs", self.seq_num, 1, b'')
+                    segment = struct.pack(f"!IIIs", self.seq_num, 1, 0, b'')
                     self.socket.sendto(segment, (self.dst_ip, self.dst_port))
-                else:
-                    print("ack recieved")
-                    self.ack = True
+
             except Exception as e:
                 print("listener died!")
                 print(e)
