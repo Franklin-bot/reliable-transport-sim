@@ -1,12 +1,11 @@
 import struct
 import time
+import hashlib
 # do not import anything else from loss_socket besides LossyUDP
 from lossy_socket import LossyUDP
 # do not import anything else from socket except INADDR_ANY
 from socket import INADDR_ANY
 from concurrent.futures import ThreadPoolExecutor
-
-
 
 
 class Streamer:
@@ -34,8 +33,9 @@ class Streamer:
 
         for i in range(0, len(data_bytes), self.packet_size):
             curr_bytes = data_bytes[i:min(i+self.packet_size, len(data_bytes))]
-            segment = struct.pack(f"!III{len(curr_bytes)}s", self.seq_num, 0, 0, curr_bytes)
-            self.seq_num += min(len(curr_bytes), self.packet_size)
+            hashed_bytes = hashlib.md5(curr_bytes).digest()
+            segment = struct.pack(f"!III16s{len(curr_bytes)}s", self.seq_num, 0, 0, hashed_bytes, curr_bytes)
+            self.seq_num += min(len(curr_bytes)+16, self.packet_size)
 
             while True:
                 self.socket.sendto(segment, (self.dst_ip, self.dst_port))
@@ -73,7 +73,7 @@ class Streamer:
         # send fin
         print("sending fin")
         while True:
-            segment = struct.pack(f"!IIIs", self.seq_num, 0, 1, b'')
+            segment = struct.pack(f"!III16s1s", self.seq_num, 0, 1, b'\x00' * 16, b'')
             self.socket.sendto(segment, (self.dst_ip, self.dst_port))
 
             if self.waitForAck(): break
@@ -94,11 +94,12 @@ class Streamer:
                 segment, addr = self.socket.recvfrom()
                 if not segment:
                     break
-                tup = struct.unpack(f"!III{len(segment)-12}s", segment)
+                tup = struct.unpack(f"!III16s{len(segment)-28}s", segment)
                 seq_num = tup[0]
                 is_ack = tup[1]
                 fin = tup[2]
-                data = tup[3]
+                hashed_data = tup[3]
+                data = tup[4]
 
                 if is_ack:
                     if fin:
@@ -111,14 +112,17 @@ class Streamer:
                     print("fin recieved")
                     self.fin = True
                     print("sending fin ack")
-                    segment = struct.pack(f"!IIIs", self.seq_num, 1, 1, b'')
+                    segment = struct.pack(f"!III16s1s", self.seq_num, 1, 1, b'\x00' * 16, b'')
                     self.socket.sendto(segment, (self.dst_ip, self.dst_port))
-
                 else:
                     print("data recieved")
+                    rehashed_data = hashlib.md5(data).digest()
+                    if rehashed_data != hashed_data: 
+                        print("hashed data does not match, bit has been flipped")
+                        continue
                     self.receive_buffer[seq_num] = data
                     print("sending ack")
-                    segment = struct.pack(f"!IIIs", self.seq_num, 1, 0, b'')
+                    segment = struct.pack(f"!III16s1s", self.seq_num, 1, 0, b'\x00' * 16, b'')
                     self.socket.sendto(segment, (self.dst_ip, self.dst_port))
 
             except Exception as e:
