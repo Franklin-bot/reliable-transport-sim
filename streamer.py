@@ -60,7 +60,6 @@ class Streamer:
             time.sleep(0.01)
             if (self.ack) : return True
         print("resending")
-        self.ack = False
         return False
 
 
@@ -82,7 +81,6 @@ class Streamer:
            the necessary ACKs and retransmissions"""
         # your code goes here, especially after you add ACKs and retransmissions.
 
-
         # send fin and wait for ack
         print("sending fin")
         while True:
@@ -93,6 +91,7 @@ class Streamer:
 
             print("waiting for fin ack")
             if self.waitForAck(): break
+            self.ack = False
 
         # wait until a fin has been recieved
         while not self.fin_recieved:
@@ -102,8 +101,8 @@ class Streamer:
         time.sleep(2)
 
         # close the connection
-        # self.closed = True
-        # self.socket.stoprecv()
+        self.closed = True
+        self.socket.stoprecv()
 
     def listener(self) -> None:
 
@@ -128,6 +127,7 @@ class Streamer:
                     if is_ack:
                         if fin:
                             print("fin ack recieved")
+                            self.ack = True
                         else:
                             print(f"data ack recieved for seq num {seq_num}")
                             if seq_num in self.transit:
@@ -167,7 +167,9 @@ class Streamer:
     def sender(self):
 
         while True:
-            time.sleep(1)
+            time.sleep(5)
+            if self.closed:
+                break
             print("Timer went off!!!\n")
             print(self.transit.keys())
 
