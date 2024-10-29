@@ -39,6 +39,8 @@ class Streamer:
 
     def send(self, data_bytes: bytes) -> None:
 
+        while len(self.transit) > 3:
+            time.sleep(0.01)
 
         with self.transit_lock:
             for i in range(0, len(data_bytes), self.packet_size):
@@ -167,7 +169,7 @@ class Streamer:
     def sender(self):
 
         while True:
-            time.sleep(5)
+            time.sleep(0.25)
             if self.closed:
                 break
             print("Timer went off!!!\n")
