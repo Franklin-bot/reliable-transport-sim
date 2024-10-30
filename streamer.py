@@ -9,8 +9,6 @@ from socket import INADDR_ANY
 from concurrent.futures import ThreadPoolExecutor
 
 
-
-
 class Streamer:
     def __init__(self, dst_ip, dst_port,
                  src_ip=INADDR_ANY, src_port=0):
@@ -33,9 +31,26 @@ class Streamer:
         self.earliest_unacked = float('inf')
         self.transit_lock = Lock()
 
+        self.data_buffer = b''
+
         executor = ThreadPoolExecutor(max_workers=3)
         executor.submit(self.listener)
         executor.submit(self.sender)
+
+    def add_buffer_to_transit(self) -> None:
+        payload = struct.pack(f"!III{len(self.data_buffer)}s", self.seq_num, 0, 0, self.data_buffer)
+        hash = hashlib.md5(payload).digest()
+        segment = hash + payload
+
+        self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+        self.transit[self.seq_num] = [0, segment]
+        self.earliest_unacked = min(self.seq_num, self.earliest_unacked)
+        print(f"sending... earliest unacked is now {self.earliest_unacked}")
+        print("waiting for ack")
+
+        self.seq_num += len(self.data_buffer)
+        print("buffered data sent, sequence number: " + str(self.seq_num))
+        self.data_buffer = b''
 
     def send(self, data_bytes: bytes) -> None:
 
@@ -43,9 +58,27 @@ class Streamer:
             time.sleep(0.01)
 
         with self.transit_lock:
-            for i in range(0, len(data_bytes), self.packet_size):
-                curr_bytes = data_bytes[i:min(i+self.packet_size, len(data_bytes))]
-                payload = struct.pack(f"!III{len(curr_bytes)}s", self.seq_num, 0, 0, curr_bytes)
+            if len(data_bytes) < self.packet_size: 
+                self.data_buffer += data_bytes
+                if self.earliest_unacked == float("inf") or len(self.data_buffer) > self.packet_size: 
+                    self.add_buffer_to_transit(); 
+            else: 
+                for i in range(0, len(data_bytes), self.packet_size):
+                    curr_bytes = data_bytes[i:min(i+self.packet_size, len(data_bytes))]
+                    payload = struct.pack(f"!III{len(curr_bytes)}s", self.seq_num, 0, 0, curr_bytes)
+                    hash = hashlib.md5(payload).digest()
+                    segment = hash + payload
+
+                    self.socket.sendto(segment, (self.dst_ip, self.dst_port))
+                    self.transit[self.seq_num] = [0, segment]
+                    self.earliest_unacked = min(self.seq_num, self.earliest_unacked)
+                    print(f"sending... earliest unacked is now {self.earliest_unacked}")
+                    print("waiting for ack")
+
+                    self.seq_num += min(len(curr_bytes), self.packet_size)
+
+            if len(self.data_buffer) >= self.packet_size or self.earliest_unacked == float('inf'):
+                payload = struct.pack(f"!III{len(self.data_buffer)}s", self.seq_num, 0, 0, self.data_buffer)
                 hash = hashlib.md5(payload).digest()
                 segment = hash + payload
 
@@ -55,7 +88,9 @@ class Streamer:
                 print(f"sending... earliest unacked is now {self.earliest_unacked}")
                 print("waiting for ack")
 
-                self.seq_num += min(len(curr_bytes), self.packet_size)
+                self.seq_num += len(self.data_buffer)
+                print("buffered data sent, sequence number: " + str(self.seq_num))
+                self.data_buffer = b''
 
     def waitForAck(self):
         for _ in range(0, 25):
@@ -176,6 +211,8 @@ class Streamer:
             print(self.transit.keys())
 
             with self.transit_lock:
+                if self.earliest_unacked == float("inf") and len(self.data_buffer) > 0: 
+                    self.add_buffer_to_transit(); 
                 for key ,value in self.transit.items():
                     segment = value[1]
                     self.socket.sendto(segment, (self.dst_ip, self.dst_port))

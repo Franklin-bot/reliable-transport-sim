@@ -46,6 +46,7 @@ def host1(listen_port, remote_port):
             s.send(buf.encode('utf-8'))
             buf = ""
         i += 1
+    print("connection closed")
     s.close()
     print("CHECK THE OTHER SCRIPT FOR STAGE 2 RESULTS.")
 
@@ -59,6 +60,7 @@ def host2(listen_port, remote_port):
         print("sending {%s}" % buf)
         s.send(buf.encode('utf-8'))
     receive(s)
+    print("connection closed")
     s.close()
     print("STAGE 2 TEST PASSED!")
 
